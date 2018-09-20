@@ -1,0 +1,46 @@
+*.pyc
+cherrytree.egg-info/
+yarn-error.log
+_modules
+changelog.sh
+.DS_Store
+.coverage
+_build
+_static
+_images
+_modules
+env_py3
+envpy3
+.eggs
+build
+*.db
+tmp
+local_config.py
+env
+dist
+app.db
+*.bak
+.idea
+*.sqllite
+.vscode
+.python-version
+.tox
+dump.rdb
+
+# Node.js, webpack artifacts
+*.entry.js
+*.js.map
+node_modules
+npm-debug.log*
+
+# IntelliJ
+*.iml
+venv
+@eaDir/
+
+# docker
+/Dockerfile
+/docker-build.sh
+/docker-compose.yml
+/docker-entrypoint.sh
+/docker-init.sh
