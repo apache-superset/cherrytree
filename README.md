@@ -3,7 +3,7 @@
 
 Cherry Tree is a set of tools that were originally designed to help
 build releases for
-[Apache Superset] (https://github.com/apache/incubator-superset),
+[Apache Superset](https://github.com/apache/incubator-superset),
 but can be use for any other project
 that wants to implement a similar workflow.
 
