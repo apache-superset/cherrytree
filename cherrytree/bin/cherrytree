@@ -38,7 +38,7 @@ REMOTES = ['lyft', 'apache', 'hughhhh']
 with yaspin(text="Loading", color="yellow") as spinner:
     conf = ConfigFactory.parse_file('scripts/build.conf')
 
-    target = conf.get('target')
+    base_ref = conf.get('base_ref')
 
     try:
         deploy_branch = args.all[0]
@@ -60,7 +60,7 @@ with yaspin(text="Loading", color="yellow") as spinner:
     os_system('git fetch --all')
 
     update_spinner_txt(spinner, 'Checking out base branch...')
-    os_system('git checkout {}'.format(target))
+    os_system('git checkout {}'.format(base_ref))
 
     os_system('git branch -D {}'.format('temp-branch'), raise_on_error=False)
     os_system('git checkout -b {}'.format('temp-branch'))
