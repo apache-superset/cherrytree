@@ -5,7 +5,7 @@ import re
 from github import Github
 from github.Label import Label
 
-REPO = 'apache/incubator-superset'
+REPO = "apache/incubator-superset"
 
 
 def get_github_instance():
@@ -24,13 +24,17 @@ def get_tags():
     repo = get_repo()
     return repo.get_tags()
 
+def get_commit(sha):
+    repo = get_repo()
+    return repo.get_commit(sha)
+
 
 def get_issues_from_labels(labels, prs_only=False):
     repo = get_repo()
     label_objects = []
     for label in labels:
         label_objects.append(repo.get_label(label))
-    issues = repo.get_issues(labels=label_objects, state='all')
+    issues = repo.get_issues(labels=label_objects, state="all")
     if prs_only:
         issues = [o for o in issues if o.pull_request]
     return issues
@@ -42,7 +46,7 @@ def get_prs_from_labels(labels):
     return prs
 
 
-def get_commits(branch='master', since=None):
+def get_commits(branch="master", since=None):
     """Get commit objects from a branch, over a limited period"""
     repo = get_repo()
     branch_object = repo.get_branch(branch)
@@ -56,7 +60,7 @@ def get_commits(branch='master', since=None):
 
 def commit_pr_number(commit):
     """Given a commit object, returns the PR number"""
-    res = re.search(r'\(#(\d*)\)', commit.commit.message)
+    res = re.search(r"\(#(\d*)\)", commit.commit.message)
     if res:
         return int(res.groups()[0])
 

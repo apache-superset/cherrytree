@@ -36,9 +36,11 @@ setup(
     install_requires=[
         'click',
         'pygithub',
+        'python-dateutil',
         'GitPython',
         'delegator',
         'pyhocon',
+        'pyyaml',
         'yaspin',
     ],
     author='Maxime Beauchemin',
