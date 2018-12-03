@@ -1,8 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
-from __future__ import print_function
-
 from datetime import datetime, timedelta
 import sys
 import os
@@ -12,7 +9,8 @@ from yaspin import yaspin
 from pyhocon import ConfigFactory
 import click
 
-from cherrytree.github_utils import get_issues_from_labels, get_commits
+from cherrytree.github_utils import (
+    get_issues_from_labels, get_commits, get_commit_pr_map)
 
 sys.path.insert(0, os.path.abspath('..'))
 
@@ -20,19 +18,6 @@ sys.path.insert(0, os.path.abspath('..'))
 @click.group()
 def cli():
     click.secho('🍒🌳🍒 CherryTree', fg='cyan')
-
-
-def match_pr_to_commit(commits, prs):
-    """Given a list of commits and prs, returns a list of tuples of pr
-    numbers and its matching commit sha, if any or None"""
-    results = []
-    for commit in commits:
-        for pr in prs:
-            search_for = f'(#{pr.number})'
-            msg = commit.commit.message
-            if search_for in msg:
-                results.append([pr, commit])
-    return results
 
 
 @cli.command()
@@ -46,27 +31,42 @@ def match_pr_to_commit(commits, prs):
 )
 def update_recipe(minor_version, branch='master', since=90):
     """Creates or updates a recipe (release) file"""
+
     click.secho(f'Updating recipe for {minor_version}', fg='yellow')
     label = 'v' + minor_version
-    click.secho(f'Fetching PRs for label "{label}"', fg='cyan')
+    click.secho(f'Fetching & listing PRs for label "{label}"', fg='cyan')
     prs = get_issues_from_labels([label], prs_only=True)
-    for pr in prs:
-        s = f'{pr.number} | {pr.state} | {pr.title}'
-        click.secho(s, fg='blue')
+    click.secho(f'{len(prs)} PRs found', fg='cyan')
+
     click.secho(
         f'Fetching all commits in {branch} '
         f'over the past {since} days', fg='cyan')
     since = datetime.now() - timedelta(since)
     commits = [o for o in get_commits(branch, since=since)]
     click.secho(f'{len(commits)} commits found in {branch}', fg='cyan')
-    results = match_pr_to_commit(commits, prs)
-    found_pr_numbers = {pr.number for pr, commit in results}
-    for pr in prs:
-        if pr.number in found_pr_numbers:
-            click.secho(f'Found {pr.number}: {pr.title}', fg='green')
-        else:
-            click.secho(f'Not found {pr.number}: {pr.title}', fg='red')
 
+
+    click.secho(f'Matching PRs to commits', fg='cyan')
+    pr_number_commit_map = get_commit_pr_map(commits, prs)
+    for pr in prs:
+        pr_info = f'#{pr.number} | {pr.state} | {pr.title}'
+        if pr_number_commit_map.get(pr.number):
+            color = 'green'
+            icon = '✅'
+        else:
+            color = 'red'
+            icon = '❌'
+        click.secho(f'{icon}: {pr_info}', fg=color)
+
+    click.secho(f'Listing ordered commits', fg='cyan')
+    pr_map = {pr.number: pr for pr in prs}
+    for pr_number, commit in pr_number_commit_map.items():
+        pr = pr_map.get(pr_number)
+        if pr:
+            click.secho(
+                f'SHA: {commit.commit.sha}| {pr.number}: {pr.title}',
+                fg='green',
+            )
 
 
 def os_system(cmd, raise_on_error=True):
