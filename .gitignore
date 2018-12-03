@@ -11,6 +11,7 @@ _images
 _modules
 env_py3
 envpy3
+envp3
 .eggs
 build
 *.db

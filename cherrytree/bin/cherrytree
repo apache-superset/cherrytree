@@ -3,94 +3,150 @@
 
 from __future__ import print_function
 
+from datetime import datetime, timedelta
 import sys
 import os
-import webbrowser
 import delegator
 from yaspin import yaspin
 
 from pyhocon import ConfigFactory
-from clint.arguments import Args
-from clint.textui import puts, colored, indent
+import click
+
+from cherrytree.github_utils import get_issues_from_labels, get_commits
 
 sys.path.insert(0, os.path.abspath('..'))
 
-args = Args()
 
-# TODO: Change this into class (Code as configuration)
-# TODO: Fix mergeConflicts on you local instance of superset and push it to lyft/incubator-superset
-# TODO: keep track of versioning and tag internal to the branch name this can be written to a file or tag in general
+@click.group()
+def cli():
+    click.secho('🍒🌳🍒 CherryTree', fg='cyan')
+
+
+def match_pr_to_commit(commits, prs):
+    """Given a list of commits and prs, returns a list of tuples of pr
+    numbers and its matching commit sha, if any or None"""
+    results = []
+    for commit in commits:
+        for pr in prs:
+            search_for = f'(#{pr.number})'
+            msg = commit.commit.message
+            if search_for in msg:
+                results.append([pr, commit])
+    return results
+
+
+@cli.command()
+@click.argument('minor_version')
+@click.option('--branch', default='master')
+@click.option(
+    '--since',
+    default=90,
+    type=int,
+    help="Since when to look for commits, in days",
+)
+def update_recipe(minor_version, branch='master', since=90):
+    """Creates or updates a recipe (release) file"""
+    click.secho(f'Updating recipe for {minor_version}', fg='yellow')
+    label = 'v' + minor_version
+    click.secho(f'Fetching PRs for label "{label}"', fg='cyan')
+    prs = get_issues_from_labels([label], prs_only=True)
+    for pr in prs:
+        s = f'{pr.number} | {pr.state} | {pr.title}'
+        click.secho(s, fg='blue')
+    click.secho(
+        f'Fetching all commits in {branch} '
+        f'over the past {since} days', fg='cyan')
+    since = datetime.now() - timedelta(since)
+    commits = [o for o in get_commits(branch, since=since)]
+    click.secho(f'{len(commits)} commits found in {branch}', fg='cyan')
+    results = match_pr_to_commit(commits, prs)
+    found_pr_numbers = {pr.number for pr, commit in results}
+    for pr in prs:
+        if pr.number in found_pr_numbers:
+            click.secho(f'Found {pr.number}: {pr.title}', fg='green')
+        else:
+            click.secho(f'Not found {pr.number}: {pr.title}', fg='red')
+
 
 
 def os_system(cmd, raise_on_error=True):
     p = delegator.run(cmd)
     if raise_on_error and p.return_code != 0:
         puts(p.err)
-        raise Exception("Command failed: {}".format(cmd))
+        raise Exception("Command failed: {cmd}")
 
 
 def update_spinner_txt(spinner, txt):
     spinner.text = txt
 
 
-REMOTES = ['lyft', 'apache', 'hughhhh']
+def get_remotes_from_current_repo():
+    return ['lyft', 'apache']
 
-with yaspin(text="Loading", color="yellow") as spinner:
-    conf = ConfigFactory.parse_file('scripts/build.conf')
 
-    base_ref = conf.get('base_ref')
+@cli.command()
+def bake(micro_version):
+    with yaspin(text="Loading", color="yellow") as spinner:
+        conf = ConfigFactory.parse_file('scripts/build.conf')
 
-    try:
-        deploy_branch = args.all[0]
-        commit_msg = args.all[1] if len(args.all) > 1 else '🍒'
-    except IndexError:
-        puts(colored.red('You must enter a branch name e.g. `python scripts/git_build.py {branch_name}`'))
-        os._exit(1)
+        base_ref = conf.get('base_ref')
 
-    update_spinner_txt(spinner, 'Checking out changes')
+        try:
+            deploy_branch = args.all[0]
+            commit_msg = args.all[1] if len(args.all) > 1 else '🍒'
+        except IndexError:
+            puts(colored.red('You must enter a branch name e.g. `python scripts/git_build.py {branch_name}`'))
+            os._exit(1)
 
-    os_system('git submodule update --checkout')
+        update_spinner_txt(spinner, 'Checking out changes')
 
-    os.chdir('upstream')
-    for remote in REMOTES:
-        update_spinner_txt(spinner, 'Adding remote {}'.format(remote))
-        os_system('git remote add {} git@github.com:{}/incubator-superset.git'.format(remote, remote), raise_on_error=False)
+        os_system('git submodule update --checkout')
 
-    update_spinner_txt(spinner, 'Fetching all branches...')
-    os_system('git fetch --all')
+        os.chdir('upstream')
+        for remote in get_remotes_from_current_repo():
+            update_spinner_txt(spinner, 'Adding remote {remote}')
+            repo = f'git@github.com:{remote}/incubator-superset.git'
+            cmd = f'git remote add {remote} {repo}'
+            os_system(cmd, raise_on_error=False)
 
-    update_spinner_txt(spinner, 'Checking out base branch...')
-    os_system('git checkout {}'.format(base_ref))
+        update_spinner_txt(spinner, 'Fetching all branches...')
+        os_system('git fetch --all')
 
-    os_system('git branch -D {}'.format('temp-branch'), raise_on_error=False)
-    os_system('git checkout -b {}'.format('temp-branch'))
+        update_spinner_txt(spinner, 'Checking out base branch...')
+        os_system(f'git checkout {base_ref}')
 
-    for SHA_, cherry in conf.get('cherries'):
-        update_spinner_txt(spinner, 'Placing 🍒 : {}'.format(cherry))
-        os_system('git cherry-pick -x {}'.format(SHA_))
+        os_system('git branch -D temp-branch', raise_on_error=False)
+        os_system('git checkout -b temp-branch')
 
-    num_of_cherries = len(conf.get('cherries'))
-    os_system('git reset --soft HEAD~{}'.format(num_of_cherries))
-    os_system('git commit -m \'{}\''.format(conf.get('version')))
+        for SHA_, cherry in conf.get('cherries'):
+            update_spinner_txt(spinner, f'Placing 🍒 : {cherry}')
+            os_system(f'git cherry-pick -x {SHA_}')
 
-    # TODO:(hugh) randomly generate a scientist name just like docker
-    update_spinner_txt(spinner, 'Delete deploy branch if already exist')
-    os_system('git branch -D {}'.format(deploy_branch), False)
+        num_of_cherries = len(conf.get('cherries'))
+        os_system(f'git reset --soft HEAD~{num_of_cherries}')
+        os_system('git commit -m \'{}\''.format(conf.get('version')))
 
-    update_spinner_txt(spinner, 'checking out fresh branch...')
-    os_system('git checkout -b {}'.format(deploy_branch))
+        # TODO:(hugh) randomly generate a scientist name just like docker
+        update_spinner_txt(spinner, 'Delete deploy branch if already exist')
+        os_system(f'git branch -D {deploy_branch}', False)
 
-    update_spinner_txt(spinner, 'Push branch up to github 🚀')
-    os_system('git push -f lyft {}'.format(deploy_branch))
+        update_spinner_txt(spinner, 'checking out fresh branch...')
+        os_system(f'git checkout -b {deploy_branch}')
 
-    version = conf.get_string('version')
-    bumped_version = int(version.split('.')[-1]) + 1
+        update_spinner_txt(spinner, 'Push branch up to github 🚀')
+        os_system('git push -f lyft {deploy_branch}')
 
-    os.chdir('..')
-    current_superset_private_branch = os.popen('git rev-parse --abbrev-ref HEAD').read().split('\n')[0]
-    os_system('git add .')
-    os_system('git commit -m \'{}\''.format(commit_msg))
-    os_system('git push origin {}'.format(current_superset_private_branch))
-    update_spinner_txt(spinner, 'Redirecting you to github for PR creation 🚢')
-    webbrowser.open_new('https://github.com/lyft/superset-private/compare/{}'
-                        .format(current_superset_private_branch))
+        version = conf.get_string('version')
+        bumped_version = int(version.split('.')[-1]) + 1
+
+        os.chdir('..')
+        current_superset_private_branch = os.popen('git rev-parse --abbrev-ref HEAD').read().split('\n')[0]
+        os_system('git add .')
+        os_system(f"git commit -m '{commit_msg}'")
+        os_system(f'git push origin {current_superset_private_branch}')
+        update_spinner_txt(spinner, 'Redirecting you to github for PR creation 🚢')
+        click.launch(f'https://github.com/lyft/superset-private/compare/{current_superset_private_branch}')
+
+
+if __name__ == '__main__':
+    cli()
