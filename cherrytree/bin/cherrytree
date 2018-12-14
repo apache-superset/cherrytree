@@ -10,7 +10,7 @@ import click
 import json
 import yaml
 
-from cherrytree.branch import ReleaseBranch
+from cherrytree.branch import CherryTreeBranch
 
 sys.path.insert(0, os.path.abspath(".."))
 
@@ -37,7 +37,8 @@ def update_recipe(
     """Creates or updates a recipe (release) file"""
     click.secho(f"Crafting recipe for {minor_version}", fg="yellow")
     search_branches = search_branch or ['master']
-    rb = ReleaseBranch(minor_version, base_ref, search_branches=search_branches)
+    rb = CherryTreeBranch(
+        minor_version, base_ref, search_branches=search_branches)
     data = rb.data()
     if output_format == 'yaml':
         output = yaml.dump(data, default_flow_style=False)
