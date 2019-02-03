@@ -1,6 +1,7 @@
 from collections import OrderedDict
 
 import click
+import git
 from cherrytree import github_utils as g
 from dateutil import parser
 
@@ -19,7 +20,7 @@ class GitBranch:
         click.secho(
             f"Fetching all commits in {self.branch} " +
             f"since {since}",
-            fg="bright_cyan",
+            fg="cyan",
         )
         commits = OrderedDict()
         for commit in g.get_commits(self.branch, since=since):
@@ -30,35 +31,36 @@ class GitBranch:
 
 class CherryTreeBranch:
     """Represents a release branch"""
-    def __init__(self, branch, base_ref, search_branches=None):
+    def __init__(self, branch, base_ref=None, search_branches=None, labels=None):
         self.search_branches = search_branches or ['master']
 
         self.branch = branch
-        self.base_ref = base_ref
 
-        repo = g.get_repo()
-        click.secho(f'Fetching base commit info for {base_ref}', fg="bright_cyan")
-        self.base_commit = repo.get_commit(base_ref)
-        since = parser.parse(self.base_commit.last_modified)
-        short_sha = self.base_commit.commit.sha[:SHORT_SHA_LEN]
-        click.secho(f'Base SHA {short_sha} last_modified {since}', fg="cyan")
+        github_repo = g.get_repo()
+        self.github_repo = github_repo
+        self.git_repo = git.repo.Repo()
 
-        click.secho(f"Fetching tags", fg="bright_cyan")
-        self.tags_map = {t.commit.sha: t.name for t in repo.get_tags()}
+        self.base_ref = base_ref or self.get_base()
+        click.secho(f"Base ref is {self.base_ref}", fg="cyan")
+
+        click.secho(f"Fetching tags", fg="cyan")
+        self.tags_map = {t.commit.sha: t.name for t in github_repo.get_tags()}
         click.secho(f"{len(self.tags_map)} tags retrieved", fg="cyan")
 
-        label = f"v{branch}"
-        click.secho(f'Fetching & listing PRs for label "{label}"', fg="bright_cyan")
-        prs = g.get_issues_from_labels([label], prs_only=True)
-        click.secho(f"{len(prs)} PRs found", fg="cyan")
+        labels = labels or [f"v{branch}"]
+        prs = []
+        for label in labels:
+            click.secho(f'Fetching & listing PRs for label "{label}"', fg="cyan")
+            prs += g.get_issues_from_labels([label], prs_only=True)
+            click.secho(f"{len(prs)} PRs found", fg="cyan")
 
         self.branches = {}
         commits = OrderedDict()
         for branch in self.search_branches:
-            self.branches[branch] = GitBranch(branch, self.base_commit)
-            commits.update(self.branches[branch].commits)
+            for commit in self.git_repo.iter_commits(branch):
+                commits[commit.hexsha] = commit
 
-        click.secho(f"Matching PRs to commits", fg="bright_cyan")
+        click.secho(f"Matching PRs to commits", fg="cyan")
         pr_number_commit_map = g.get_commit_pr_map(commits.values(), prs)
         self.missing_pull_requests = []
         for pr in prs:
@@ -73,9 +75,17 @@ class CherryTreeBranch:
             if pr:
                 self.cherries.append(self.cherry(pr, commit))
 
+    def get_base(self):
+        base_commits = self.git_repo.merge_base('master', self.branch)
+        if len(base_commits) < 1:
+            raise Exception("No common ancestor found!")
+        elif len(base_commits) > 1:
+            raise Exception("Multiple common ancestors found!?")
+        return base_commits[0].hexsha
+
     def echo_match(self, commit, pr):
         if commit:
-            str_commit = commit.commit.sha[:SHORT_SHA_LEN]
+            str_commit = commit.hexsha[:SHORT_SHA_LEN]
         else:
             str_commit = ' ' * SHORT_SHA_LEN
         pr_info = f"#{pr.number} | {pr.state} | {str_commit} | {pr.title}"
@@ -90,7 +100,7 @@ class CherryTreeBranch:
 
     def cherry(self, pr, commit):
         return {
-            "SHA": commit.commit.sha[:SHORT_SHA_LEN],
+            "SHA": commit.hexsha[:SHORT_SHA_LEN],
             "pr_number": pr.number,
             "pr_title": pr.title,
             "fixed_sha": None,

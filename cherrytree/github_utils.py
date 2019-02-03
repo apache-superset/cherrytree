@@ -24,6 +24,7 @@ def get_tags():
     repo = get_repo()
     return repo.get_tags()
 
+
 def get_commit(sha):
     repo = get_repo()
     return repo.get_commit(sha)
@@ -60,7 +61,7 @@ def get_commits(branch="master", since=None):
 
 def commit_pr_number(commit):
     """Given a commit object, returns the PR number"""
-    res = re.search(r"\(#(\d*)\)", commit.commit.message)
+    res = re.search(r"\(#(\d*)\)", commit.message)
     if res:
         return int(res.groups()[0])
 

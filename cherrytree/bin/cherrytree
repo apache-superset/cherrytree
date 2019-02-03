@@ -25,6 +25,9 @@ def cli():
 @click.option(
     "--search-branch", '-s', multiple=True,
     help='Default "master",multiple is allowed as in "-s foo -s bar"')
+@click.option(
+    "--labels", '-l', multiple=True,
+    help='PR labels to include in branch, default is "v{branch}"')
 @click.option("--base-ref", '-r')
 @click.option(
     '--output-format', '-o', type=click.Choice(['yaml', 'json']), default='yaml')
@@ -32,13 +35,16 @@ def update_recipe(
         minor_version,
         search_branch,
         base_ref,
+        labels,
         output_format='yaml',
 ):
     """Creates or updates a recipe (release) file"""
     click.secho(f"Crafting recipe for {minor_version}", fg="yellow")
     search_branches = search_branch or ['master']
     rb = CherryTreeBranch(
-        minor_version, base_ref, search_branches=search_branches)
+        minor_version, base_ref, search_branches=search_branches,
+        labels=labels,
+    )
     data = rb.data()
     if output_format == 'yaml':
         output = yaml.dump(data, default_flow_style=False)
