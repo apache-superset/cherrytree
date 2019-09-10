@@ -34,6 +34,7 @@ def get_issues_from_labels(labels, prs_only=False):
     repo = get_repo()
     label_objects = []
     for label in labels:
+        print("---=-=-=-", label)
         label_objects.append(repo.get_label(label))
     issues = repo.get_issues(labels=label_objects, state="all")
     if prs_only:

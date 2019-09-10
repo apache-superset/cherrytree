@@ -1,6 +1,7 @@
 # Cherry Tree
 
 <img src="https://i.imgur.com/QGyxImm.jpg" title="Cherry Tree" width="250" />
+<img src="https://user-images.githubusercontent.com/487433/64575430-b62bff00-d328-11e9-80db-886c5d287941.png" title="cli screenshot" />
 
 Cherry Tree is a set of tools that were originally designed to help
 build releases for

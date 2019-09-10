@@ -43,9 +43,11 @@ class CherryTreeBranch:
         self.base_ref = base_ref or self.get_base()
         click.secho(f"Base ref is {self.base_ref}", fg="cyan")
 
+        '''
         click.secho(f"Fetching tags", fg="cyan")
         self.tags_map = {t.commit.sha: t.name for t in github_repo.get_tags()}
         click.secho(f"{len(self.tags_map)} tags retrieved", fg="cyan")
+        '''
 
         labels = labels or [f"v{branch}"]
         prs = []
