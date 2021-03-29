@@ -10,6 +10,7 @@ SHORT_SHA_LEN = 12
 
 class GitBranch:
     """Represents a git branch, fetches commits since branch-off point"""
+
     def __init__(self, branch, base_commit):
         self.branch = branch
         self.base_commit = base_commit
@@ -18,8 +19,7 @@ class GitBranch:
     def fetch_commits(self):
         since = parser.parse(self.base_commit.last_modified)
         click.secho(
-            f"Fetching all commits in {self.branch} " +
-            f"since {since}",
+            f"Fetching all commits in {self.branch} " + f"since {since}",
             fg="cyan",
         )
         commits = OrderedDict()
@@ -31,8 +31,9 @@ class GitBranch:
 
 class CherryTreeBranch:
     """Represents a release branch"""
+
     def __init__(self, branch, base_ref=None, search_branches=None, labels=None):
-        self.search_branches = search_branches or ['master']
+        self.search_branches = search_branches or ["master"]
 
         self.branch = branch
 
@@ -43,11 +44,11 @@ class CherryTreeBranch:
         self.base_ref = base_ref or self.get_base()
         click.secho(f"Base ref is {self.base_ref}", fg="cyan")
 
-        '''
+        """
         click.secho(f"Fetching tags", fg="cyan")
         self.tags_map = {t.commit.sha: t.name for t in github_repo.get_tags()}
         click.secho(f"{len(self.tags_map)} tags retrieved", fg="cyan")
-        '''
+        """
 
         labels = labels or [f"v{branch}"]
         prs = []
@@ -78,7 +79,7 @@ class CherryTreeBranch:
                 self.cherries.append(self.cherry(pr, commit))
 
     def get_base(self):
-        base_commits = self.git_repo.merge_base('master', self.branch)
+        base_commits = self.git_repo.merge_base("master", self.branch)
         if len(base_commits) < 1:
             raise Exception("No common ancestor found!")
         elif len(base_commits) > 1:
@@ -89,7 +90,7 @@ class CherryTreeBranch:
         if commit:
             str_commit = commit.hexsha[:SHORT_SHA_LEN]
         else:
-            str_commit = ' ' * SHORT_SHA_LEN
+            str_commit = " " * SHORT_SHA_LEN
         pr_info = f"#{pr.number} | {pr.state} | {str_commit} | {pr.title}"
         if commit:
             color = "green"
