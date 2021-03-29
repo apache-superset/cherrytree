@@ -91,7 +91,7 @@ class CherryTreeBranch:
             str_commit = commit.hexsha[:SHORT_SHA_LEN]
         else:
             str_commit = " " * SHORT_SHA_LEN
-        pr_info = f"#{pr.number} | {pr.state} | {str_commit} | {pr.title}"
+        pr_info = f"#{pr.number} | {pr.state:<6} | {str_commit} | {pr.title}"
         if commit:
             color = "green"
             icon = "✅"
