@@ -62,7 +62,7 @@ def get_commits(branch="master", since=None):
 
 def commit_pr_number(commit):
     """Given a commit object, returns the PR number"""
-    res = re.search(r"\(#(\d*)\)", commit.message)
+    res = re.search(r"\(#(\d*)\)$", commit.summary)
     if res:
         return int(res.groups()[0])
 
