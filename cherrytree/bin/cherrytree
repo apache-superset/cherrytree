@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import json
 import os
+import re
 import sys
 
 import click
@@ -29,13 +30,13 @@ def cli():
     help='PR labels to include in branch, default is "v{branch}"')
 @click.option("--base-ref", '-r')
 @click.option(
-    '--output-format', '-o', type=click.Choice(['yaml', 'json']), default='yaml')
+    '--output-format', '-o', type=click.Choice(['yaml', 'json']), default='json')
 def update_recipe(
         minor_version,
         search_branch,
         base_ref,
         labels,
-        output_format='yaml',
+        output_format='json',
 ):
     """Creates or updates a recipe (release) file"""
     click.secho(f"Crafting recipe for {minor_version}", fg="yellow")
@@ -52,11 +53,20 @@ def update_recipe(
     click.secho(output, fg='blue')
 
 
-def os_system(cmd, raise_on_error=True):
+def os_system(cmd, raise_on_error=True) -> str:
     p = delegator.run(cmd)
     if raise_on_error and p.return_code != 0:
         click.secho(p.err, fg='red')
-        raise Exception("Command failed: {cmd}")
+        raise Exception(f"Command failed: {cmd}")
+    return p.out
+
+
+def git_get_current_head() -> str:
+    output = os_system("git status | head -1")
+    match = re.match("(?:HEAD detached at|On branch) (.*)", output)
+    if not match:
+        return ""
+    return match.group(1)
 
 
 def update_spinner_txt(spinner, txt):
@@ -68,34 +78,20 @@ def get_remotes_from_current_repo():
 
 
 @cli.command()
-def bake(micro_version):
+@click.argument("micro_version")
+def bake(micro_version, *args):
     """Bakes a release based on a bake file"""
+    print(args)
     with yaspin(text="Loading", color="yellow") as spinner:
-        conf = ConfigFactory.parse_file("scripts/build.conf")
+        conf = ConfigFactory.parse_file("bakefiles/build.conf")
 
         base_ref = conf.get("base_ref")
 
-        try:
-            deploy_branch = args.all[0]
-            commit_msg = args.all[1] if len(args.all) > 1 else "🍒"
-        except IndexError:
-            puts(
-                colored.red(
-                    "You must enter a branch name e.g. `python scripts/git_build.py {branch_name}`"
-                )
-            )
-            os._exit(1)
+        commit_msg = "my msg 🍒"
+
+        current_head = git_get_current_head()
 
         update_spinner_txt(spinner, "Checking out changes")
-
-        os_system("git submodule update --checkout")
-
-        os.chdir("upstream")
-        for remote in get_remotes_from_current_repo():
-            update_spinner_txt(spinner, "Adding remote {remote}")
-            repo = f"git@github.com:{remote}/superset.git"
-            cmd = f"git remote add {remote} {repo}"
-            os_system(cmd, raise_on_error=False)
 
         update_spinner_txt(spinner, "Fetching all branches...")
         os_system("git fetch --all")
@@ -103,26 +99,26 @@ def bake(micro_version):
         update_spinner_txt(spinner, "Checking out base branch...")
         os_system(f"git checkout {base_ref}")
 
-        os_system("git branch -D temp-branch", raise_on_error=False)
-        os_system("git checkout -b temp-branch")
+        os_system("git branch -D _temp-branch", raise_on_error=False)
+        os_system("git checkout -b _temp-branch")
 
-        for SHA_, cherry in conf.get("cherries"):
-            update_spinner_txt(spinner, f"Placing 🍒 : {cherry}")
-            os_system(f"git cherry-pick -x {SHA_}")
+        for cherry in conf.get("cherries"):
+            sha = cherry["SHA"]
+            pr_number = cherry["pr_number"]
+            pr_title = cherry["pr_title"]
+            update_spinner_txt(spinner, f"Placing 🍒 #{pr_number}: {pr_title}")
+            try:
+                os_system(f"git cherry-pick -x {sha}")
+            except Exception:
+                os_system("git cherry-pick --abort")
+                update_spinner_txt(spinner, f"Exception #{pr_number}: {pr_title}")
+                os_system(f"git checkout {current_head}")
+                os_system("git branch -D _temp-branch")
+                exit(1)
 
         num_of_cherries = len(conf.get("cherries"))
         os_system(f"git reset --soft HEAD~{num_of_cherries}")
         os_system("git commit -m '{}'".format(conf.get("version")))
-
-        # TODO:(hugh) randomly generate a scientist name just like docker
-        update_spinner_txt(spinner, "Delete deploy branch if already exist")
-        os_system(f"git branch -D {deploy_branch}", False)
-
-        update_spinner_txt(spinner, "checking out fresh branch...")
-        os_system(f"git checkout -b {deploy_branch}")
-
-        update_spinner_txt(spinner, "Push branch up to github 🚀")
-        os_system("git push -f lyft {deploy_branch}")
 
         version = conf.get_string("version")
         bumped_version = int(version.split(".")[-1]) + 1

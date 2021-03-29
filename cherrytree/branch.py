@@ -1,45 +1,38 @@
 from collections import OrderedDict
+from typing import Dict, List, Optional, Sequence
 
 import click
-import git
+from git import Commit
+from git.repo import Repo
 from cherrytree import github_utils as g
-from dateutil import parser
+from github.Issue import Issue
+
+from cherrytree.github_utils import commit_pr_number
 
 SHORT_SHA_LEN = 12
 
 
-class GitBranch:
-    """Represents a git branch, fetches commits since branch-off point"""
-
-    def __init__(self, branch, base_commit):
-        self.branch = branch
-        self.base_commit = base_commit
-        self.fetch_commits()
-
-    def fetch_commits(self):
-        since = parser.parse(self.base_commit.last_modified)
-        click.secho(
-            f"Fetching all commits in {self.branch} " + f"since {since}",
-            fg="cyan",
-        )
-        commits = OrderedDict()
-        for commit in g.get_commits(self.branch, since=since):
-            commits[commit.commit.sha] = commit
-        click.secho(f"{len(commits)} commits found in {self.branch}", fg="cyan")
-        self.commits = commits
-
-
 class CherryTreeBranch:
     """Represents a release branch"""
+    branch: str
+    base_ref: str
+    search_branches: Sequence[str]
+    labels: Sequence[str]
 
-    def __init__(self, branch, base_ref=None, search_branches=None, labels=None):
+    def __init__(
+            self,
+            branch: str,
+            base_ref: Optional[str] = None,
+            search_branches: Optional[Sequence[str]] = None,
+            labels: Optional[Sequence[str]] = None,
+    ):
         self.search_branches = search_branches or ["master"]
 
         self.branch = branch
 
         github_repo = g.get_repo()
         self.github_repo = github_repo
-        self.git_repo = git.repo.Repo()
+        self.git_repo = Repo()
 
         self.base_ref = base_ref or self.get_base()
         click.secho(f"Base ref is {self.base_ref}", fg="cyan")
@@ -51,20 +44,27 @@ class CherryTreeBranch:
         """
 
         labels = labels or [f"v{branch}"]
-        prs = []
+        prs: List[Issue] = []
         for label in labels:
             click.secho(f'Fetching & listing PRs for label "{label}"', fg="cyan")
             prs += g.get_issues_from_labels([label], prs_only=True)
             click.secho(f"{len(prs)} PRs found", fg="cyan")
 
         self.branches = {}
-        commits = OrderedDict()
+        commits: Dict[int, Commit] = OrderedDict()
+        skipped_commits = 0
         for branch in self.search_branches:
             for commit in self.git_repo.iter_commits(branch):
-                commits[commit.hexsha] = commit
+                pr_number = commit_pr_number(commit)
+                if pr_number is None:
+                    skipped_commits += 1
+                else:
+                    commits[pr_number] = commit
+        if skipped_commits:
+            click.secho(f"{skipped_commits} PRs skipped", fg="yellow")
 
         click.secho(f"Matching PRs to commits", fg="cyan")
-        pr_number_commit_map = g.get_commit_pr_map(commits.values(), prs)
+        pr_number_commit_map = g.get_commit_pr_map(commits.values())
         self.missing_pull_requests = []
         for pr in prs:
             commit = pr_number_commit_map.get(pr.number)
@@ -78,7 +78,7 @@ class CherryTreeBranch:
             if pr:
                 self.cherries.append(self.cherry(pr, commit))
 
-    def get_base(self):
+    def get_base(self) -> str:
         base_commits = self.git_repo.merge_base("master", self.branch)
         if len(base_commits) < 1:
             raise Exception("No common ancestor found!")

@@ -38,7 +38,7 @@ setup(
         'pygithub',
         'python-dateutil',
         'GitPython',
-        'delegator',
+        'delegator.py',
         'pyhocon',
         'pyyaml',
         'yaspin',

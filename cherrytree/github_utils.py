@@ -1,51 +1,48 @@
-from collections import OrderedDict
 import os
 import re
+from collections import OrderedDict
+from typing import Iterable, List, Optional, Reversible
 
+from git import Commit
 from github import Github
 from github.Label import Label
+from github.Issue import Issue
+from github.GithubException import UnknownObjectException
+from github.Repository import Repository
 
-REPO = "apache/incubator-superset"
+REPO = "apache/superset"
+PR_REGEX = re.compile(r"(Merge pull request #(\d+) from|\(#(\d*)\)$)")
 
 
-def get_github_instance():
+def get_github_instance() -> Github:
     token = os.environ.get("GITHUB_TOKEN")
     if not token:
         raise Exception("Env var 'GITHUB_TOKEN' is missing")
     return Github(token)
 
 
-def get_repo():
+def get_repo() -> Repository:
     g = get_github_instance()
     return g.get_repo(REPO)
 
 
-def get_tags():
+def get_issues_from_labels(
+        labels: Iterable[str],
+        prs_only: bool = False
+) -> Iterable[Issue]:
     repo = get_repo()
-    return repo.get_tags()
-
-
-def get_commit(sha):
-    repo = get_repo()
-    return repo.get_commit(sha)
-
-
-def get_issues_from_labels(labels, prs_only=False):
-    repo = get_repo()
-    label_objects = []
+    label_objects: List[Label] = []
     for label in labels:
         print("---=-=-=-", label)
-        label_objects.append(repo.get_label(label))
+        try:
+            label_objects.append(repo.get_label(label))
+        except UnknownObjectException:
+            # unknown label
+            return []
     issues = repo.get_issues(labels=label_objects, state="all")
     if prs_only:
         issues = [o for o in issues if o.pull_request]
     return issues
-
-
-def get_prs_from_labels(labels):
-    issues = get_issues_from_labels(labels, prs_only=True)
-    prs = [o.as_pull_request() for o in issues]
-    return prs
 
 
 def get_commits(branch="master", since=None):
@@ -60,14 +57,16 @@ def get_commits(branch="master", since=None):
     return commits
 
 
-def commit_pr_number(commit):
+def commit_pr_number(commit: Commit) -> Optional[int]:
     """Given a commit object, returns the PR number"""
-    res = re.search(r"\(#(\d*)\)$", commit.summary)
+    res = PR_REGEX.search(commit.summary)
     if res:
-        return int(res.groups()[0])
+        groups = res.groups()
+        return int(groups[1] or groups[2])
+    return None
 
 
-def get_commit_pr_map(commits, prs):
+def get_commit_pr_map(commits: Reversible[Commit]):
     """Given a list of commits and prs, returns a map of pr_number to commit"""
     d = OrderedDict()
     for commit in reversed(commits):
