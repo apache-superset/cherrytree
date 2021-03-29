@@ -23,7 +23,7 @@ def cli():
 @click.argument("minor_version")
 @click.option(
     "--search-branch", '-s', multiple=True,
-    help='Default "master",multiple is allowed as in "-s foo -s bar"')
+    help='Default "master", multiple is allowed as in "-s foo -s bar"')
 @click.option(
     "--labels", '-l', multiple=True,
     help='PR labels to include in branch, default is "v{branch}"')
@@ -64,7 +64,7 @@ def update_spinner_txt(spinner, txt):
 
 
 def get_remotes_from_current_repo():
-    return ["lyft", "apache"]
+    return ["preset-io", "apache"]
 
 
 @cli.command()
@@ -93,7 +93,7 @@ def bake(micro_version):
         os.chdir("upstream")
         for remote in get_remotes_from_current_repo():
             update_spinner_txt(spinner, "Adding remote {remote}")
-            repo = f"git@github.com:{remote}/incubator-superset.git"
+            repo = f"git@github.com:{remote}/superset.git"
             cmd = f"git remote add {remote} {repo}"
             os_system(cmd, raise_on_error=False)
 
