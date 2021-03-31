@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sys
+from typing import Any, Dict, Optional
 
 import click
 import delegator
@@ -15,13 +16,78 @@ from cherrytree.branch import CherryTreeBranch
 sys.path.insert(0, os.path.abspath(".."))
 
 
+TMP_BRANCH = "_tmp_branch"
+
 @click.group()
 def cli():
     click.secho("🍒🌳🍒 CherryTree", fg="cyan")
 
 
+def apply_cherries(
+        cherry_tree: CherryTreeBranch,
+        base_branch: str,
+        target_branch: Optional[str],
+        dryrun: bool = True,
+):
+    current_head = git_get_current_head()
+    os_system("git fetch --all")
+    click.secho("Checking out base branch...", fg='blue')
+    os_system(f"git checkout {base_branch}")
+
+    if target_branch is None:
+        target_branch = TMP_BRANCH
+        os_system(f"git branch -D {target_branch}", raise_on_error=False)
+        os_system(f"git branch {target_branch}")
+    else:
+        # try to create branch if it doesn't exist
+        os_system(f"git branch {target_branch}", raise_on_error=False)
+
+    os_system(f"git checkout {target_branch}")
+
+    for cherry in reversed(cherry_tree.cherries):
+        pr = cherry.pr
+        commit = cherry.commit
+        if commit is None:
+            click.secho(f"Missing {pr.number}: {pr.title}", fg='red')
+            continue
+        sha = cherry.commit.hexsha
+        if cherry.is_applied:
+            click.secho(f"Skipping {pr.number}: {pr.title}", fg='yellow')
+            continue
+        try:
+            os_system(f"git cherry-pick -x {sha}")
+            click.secho(f"Applied #{pr.number}: {pr.title}", fg='green')
+            if dryrun:
+                os_system(f"git reset --hard HEAD~1")
+        except Exception:
+            os_system("git cherry-pick --abort")
+            # try to ff to see if cherry was already applied
+            try:
+                os_system(f"git cherry-pick --ff {sha}")
+                click.secho(f"Skipping {pr.number}: {pr.title} (empty commit)", fg='yellow')
+            except Exception:
+                click.secho(f"Conflict #{pr.number}: {pr.title}", fg='red')
+                os_system("git cherry-pick --abort")
+
+    os_system(f"git checkout {current_head}")
+    if target_branch == TMP_BRANCH:
+        os_system(f"git branch -D {target_branch}")
+    exit(1)
+
+
+def output_recipe(data: Dict[str, Any], output_format: str):
+    if output_format == 'yaml':
+        output = yaml.dump(data, default_flow_style=False)
+    else:
+        output = json.dumps(data, indent=2)
+    click.secho(output, fg='blue')
+
+
 @cli.command()
 @click.argument("minor_version")
+@click.option(
+    "--target-branch", '-t',
+    help="target branch for baking. Leave empty for dry run")
 @click.option(
     "--search-branch", '-s', multiple=True,
     help='Default "master", multiple is allowed as in "-s foo -s bar"')
@@ -31,33 +97,43 @@ def cli():
 @click.option("--base-ref", '-r')
 @click.option(
     '--output-format', '-o', type=click.Choice(['yaml', 'json']), default='json')
+@click.option(
+    "--dryrun/--no-dryrun", '-c',
+    default=True,
+    help="commit changes to target branch")
 def update_recipe(
         minor_version,
+        target_branch,
         search_branch,
         base_ref,
         labels,
-        output_format='json',
+        output_format,
+        dryrun,
 ):
     """Creates or updates a recipe (release) file"""
+
     click.secho(f"Crafting recipe for {minor_version}", fg="yellow")
-    search_branches = search_branch or ['master']
-    rb = CherryTreeBranch(
-        minor_version, base_ref, search_branches=search_branches,
+    if target_branch and check_if_branch_exists(target_branch):
+        minor_version = target_branch
+    cherry_tree = CherryTreeBranch(
+        minor_version,
+        base_ref,
         labels=labels,
+        search_branches=search_branch,
     )
-    data = rb.data()
-    if output_format == 'yaml':
-        output = yaml.dump(data, default_flow_style=False)
-    else:
-        output = json.dumps(data, indent=2)
-    click.secho(output, fg='blue')
+    apply_cherries(
+        cherry_tree=cherry_tree,
+        base_branch=minor_version,
+        target_branch=target_branch,
+        dryrun=dryrun,
+    )
+    # data = rb.data()
 
 
 def os_system(cmd, raise_on_error=True) -> str:
     p = delegator.run(cmd)
     if raise_on_error and p.return_code != 0:
-        click.secho(p.err, fg='red')
-        raise Exception(f"Command failed: {cmd}")
+        raise Exception(p.err)
     return p.out
 
 
@@ -76,6 +152,15 @@ def update_spinner_txt(spinner, txt):
 def get_remotes_from_current_repo():
     return ["preset-io", "apache"]
 
+
+def check_if_branch_exists(branch: str) -> bool:
+    current_head = git_get_current_head()
+    try:
+        os_system(f"git checkout {branch}")
+    except Exception:
+        return False
+    os_system(f"git checkout {current_head}")
+    return True
 
 @cli.command()
 @click.argument("micro_version")

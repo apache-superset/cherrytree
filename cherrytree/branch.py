@@ -1,4 +1,6 @@
 from collections import OrderedDict
+from datetime import datetime
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence
 
 import click
@@ -7,27 +9,49 @@ from git.repo import Repo
 from cherrytree import github_utils as g
 from github.Issue import Issue
 
-from cherrytree.github_utils import commit_pr_number
+from cherrytree.github_utils import commit_pr_number, tbl_cell
 
 SHORT_SHA_LEN = 12
 
 
+@dataclass
+class Cherry:
+    commit: Optional[Commit]
+    pr: Issue
+    is_applied: bool
+
+
+@dataclass
+class Summary:
+    pr_number: str
+    color: str
+    opened_by: str
+    merged_by: str
+    icon: str
+    state: str
+    sha: str
+    title: str
+
+
 class CherryTreeBranch:
     """Represents a release branch"""
+
     branch: str
     base_ref: str
     search_branches: Sequence[str]
     labels: Sequence[str]
+    branch_commits: Dict[str, Dict[int, Commit]]
+    missing_pull_requests: List[Issue]
 
     def __init__(
-            self,
-            branch: str,
-            base_ref: Optional[str] = None,
-            search_branches: Optional[Sequence[str]] = None,
-            labels: Optional[Sequence[str]] = None,
+        self,
+        branch: str,
+        base_ref: Optional[str] = None,
+        search_branches: Optional[Sequence[str]] = None,
+        labels: Optional[Sequence[str]] = None,
     ):
-        self.search_branches = search_branches or ["master"]
-
+        self.missing_pull_requests = []
+        self.search_branches = search_branches or ["master", branch]
         self.branch = branch
 
         github_repo = g.get_repo()
@@ -48,12 +72,18 @@ class CherryTreeBranch:
         for label in labels:
             click.secho(f'Fetching & listing PRs for label "{label}"', fg="cyan")
             prs += g.get_issues_from_labels([label], prs_only=True)
-            click.secho(f"{len(prs)} PRs found", fg="cyan")
+        now = datetime.now()
+        prs.sort(
+            key=lambda x: x.closed_at if x.closed_at is not None else now, reverse=True
+        )
+        click.secho(f"{len(prs)} PRs found", fg="cyan")
 
         self.branches = {}
-        commits: Dict[int, Commit] = OrderedDict()
+        self.branch_commits = {}
         skipped_commits = 0
         for branch in self.search_branches:
+            commits = OrderedDict()
+            self.branch_commits[branch] = commits
             for commit in self.git_repo.iter_commits(branch):
                 pr_number = commit_pr_number(commit)
                 if pr_number is None:
@@ -61,22 +91,28 @@ class CherryTreeBranch:
                 else:
                     commits[pr_number] = commit
         if skipped_commits:
-            click.secho(f"{skipped_commits} PRs skipped", fg="yellow")
+            click.secho(
+                f"{skipped_commits} commits skipped due to missing PRs", fg="yellow"
+            )
 
         click.secho(f"Matching PRs to commits", fg="cyan")
-        pr_number_commit_map = g.get_commit_pr_map(commits.values())
-        self.missing_pull_requests = []
-        for pr in prs:
-            commit = pr_number_commit_map.get(pr.number)
-            self.echo_match(commit, pr)
+        master_commits = self.branch_commits["master"]
+        branch_commits = self.branch_commits[branch]
+        pr_number_commit_map = g.get_commit_pr_map(master_commits.values())
 
         click.secho(f"Listing ordered commits", fg="cyan")
-        pr_map = {pr.number: pr for pr in prs}
         self.cherries = []
-        for pr_number, commit in pr_number_commit_map.items():
-            pr = pr_map.get(pr_number)
-            if pr:
-                self.cherries.append(self.cherry(pr, commit))
+        for pr in prs:
+            master_commit = master_commits.get(pr.number)
+            applied_commit = branch_commits.get(pr.number)
+            cherry = Cherry(
+                commit=master_commit,
+                pr=pr,
+                is_applied=True if applied_commit is not None else False,
+            )
+            self.cherries.append(cherry)
+
+        self.echo_cherries()
 
     def get_base(self) -> str:
         base_commits = self.git_repo.merge_base("master", self.branch)
@@ -86,41 +122,107 @@ class CherryTreeBranch:
             raise Exception("Multiple common ancestors found!?")
         return base_commits[0].hexsha
 
-    def echo_match(self, commit, pr):
-        if commit:
-            str_commit = commit.hexsha[:SHORT_SHA_LEN]
-        else:
-            str_commit = " " * SHORT_SHA_LEN
-        pr_info = f"#{pr.number} | {pr.state:<6} | {str_commit} | {pr.title}"
-        if commit:
-            color = "green"
-            icon = "✅"
-        else:
-            color = "red"
-            icon = "❌"
-            self.missing_pull_requests.append(pr)
-        click.secho(f"{icon}: {pr_info}", fg=color)
+    def echo_cherries(self) -> None:
+        summaries: List[Summary] = []
+        for cherry in self.cherries:
+            commit = cherry.commit
+            pr = cherry.pr
+            opened_by, merged_by = pr.user, pr.closed_by
+            if commit:
+                str_commit = commit.hexsha[:SHORT_SHA_LEN]
+            else:
+                str_commit = " " * SHORT_SHA_LEN
+            if cherry.is_applied:
+                color = "blue"
+                icon = "☑️"
+                state = "applied"
+            elif cherry.commit:
+                color = "green"
+                icon = "✅"
+                state = pr.state
+            else:
+                color = "red"
+                icon = "❌"
+                state = pr.state
+            summaries.append(
+                Summary(
+                    pr_number=f"#{pr.number}",
+                    color=color,
+                    opened_by=opened_by.login if opened_by else "",
+                    merged_by=merged_by.login if merged_by else "",
+                    icon=icon,
+                    state=state,
+                    sha=str_commit,
+                    title=pr.title,
+                )
+            )
+        (
+            pr_width,
+            opened_by_width,
+            merged_by_width,
+            state_width,
+            sha_width,
+            title_width,
+        ) = (
+            len("number"),
+            len("opened by"),
+            len("merged by"),
+            len("state"),
+            len("sha"),
+            len("title"),
+        )
+        for summary in summaries:
+            pr_width = max(pr_width, len(summary.pr_number))
+            opened_by_width = max(opened_by_width, len(summary.opened_by))
+            merged_by_width = max(merged_by_width, len(summary.merged_by))
+            # unicode icon widths are misrepresented by len()
+            icon_width = 2
+            state_width = max(state_width, len(summary.state))
+            sha_width = max(sha_width, len(summary.sha))
+            title_width = max(title_width, len(summary.title))
 
-    def cherry(self, pr, commit):
-        return {
-            "SHA": commit.hexsha[:SHORT_SHA_LEN],
-            "pr_number": pr.number,
-            "pr_title": pr.title,
-            "fixed_sha": None,
-        }
+        click.secho(
+            f"🔘 | "
+            f"{tbl_cell('number', pr_width)} | "
+            f"{tbl_cell('opened by', opened_by_width)} | "
+            f"{tbl_cell('merged_by', merged_by_width)} | "
+            f"{tbl_cell('state', state_width)} | "
+            f"{tbl_cell('sha', sha_width)} | "
+            f"{tbl_cell('title', title_width)}"
+        )
+        for summary in summaries:
+            pr_info = (
+                f"{summary.icon} | "
+                f"{tbl_cell(summary.pr_number, pr_width)} | "
+                f"{tbl_cell(summary.opened_by, opened_by_width)} | "
+                f"{tbl_cell(summary.merged_by, merged_by_width)} | "
+                f"{tbl_cell(summary.state, state_width)} | "
+                f"{tbl_cell(summary.sha, sha_width)} | "
+                f"{tbl_cell(summary.title, title_width)}"
+            )
+            click.secho(f"{pr_info}", fg=summary.color)
 
     def data(self):
+        commits = [cherry for cherry in self.cherries if cherry.commit is not None]
+        missing_prs = [cherry for cherry in self.cherries if cherry.commit is None]
         d = {
             "branch": self.branch,
             "base_ref": self.base_ref,
-            "cherries": self.cherries,
+            "cherries": [
+                {
+                    "sha": cherry.commit,
+                    "pr_number": cherry.pr.number,
+                    "pr_title": cherry.pr.title,
+                }
+                for cherry in commits
+            ],
         }
         if self.missing_pull_requests:
             d["missing_pull_requests"] = [
                 {
-                    "pr_number": pr.number,
-                    "pr_title": pr.title,
+                    "pr_number": cherry.pr.number,
+                    "pr_title": cherry.pr.title,
                 }
-                for pr in self.missing_pull_requests
+                for cherry in missing_prs
             ]
         return d

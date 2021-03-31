@@ -27,13 +27,11 @@ def get_repo() -> Repository:
 
 
 def get_issues_from_labels(
-        labels: Iterable[str],
-        prs_only: bool = False
+    labels: Iterable[str], prs_only: bool = False
 ) -> Iterable[Issue]:
     repo = get_repo()
     label_objects: List[Label] = []
     for label in labels:
-        print("---=-=-=-", label)
         try:
             label_objects.append(repo.get_label(label))
         except UnknownObjectException:
@@ -74,3 +72,10 @@ def get_commit_pr_map(commits: Reversible[Commit]):
         if pr_number:
             d[pr_number] = commit
     return d
+
+
+def tbl_cell(value: str, width: int) -> str:
+    trunc_value = value[:57].strip()
+    if len(trunc_value) < len(value.strip()):
+        trunc_value = f"{trunc_value}..."
+    return f"{trunc_value:<{min(width, 60)}}"
