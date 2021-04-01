@@ -5,23 +5,18 @@ from typing import Dict, List, Optional, Sequence
 import click
 from git import Commit
 from git.repo import Repo
-from cherrytree import github_utils as g
 from github.Issue import Issue
 
 from cherrytree.github_utils import (
     commit_pr_number,
     deduplicate_prs,
-    DEFAULT_REPO,
-    extract_cherry_branches,
-    extract_cherry_labels,
+    get_issues_from_labels,
     git_get_current_head,
     os_system,
     truncate_str,
 )
 from cherrytree.classes import (
     Cherry,
-    CherryBranch,
-    CherryLabel,
     CherryTreeExecutionException,
     CommitSummary,
 )
@@ -33,53 +28,49 @@ TMP_BRANCH = "__tmp_branch"
 class CherryTreeBranch:
     """Represents a release branch"""
 
-    branch: CherryBranch
-    base_ref: str
-    search_branches: Sequence[CherryBranch]
-    labels: List[CherryLabel]
-    branch_commits: Dict[CherryBranch, Dict[int, Commit]]
+    repo: str
+    release_branch: str
+    main_branch: str
+    labels: List[str]
+    branch_commits: Dict[str, Dict[int, Commit]]
     missing_pull_requests: List[Issue]
 
     def __init__(
         self,
-        branch: str,
-        base_ref: Optional[str] = None,
-        search_branches: Optional[Sequence[str]] = None,
-        labels: Optional[Sequence[str]] = None,
+        repo: str,
+        release_branch: str,
+        main_branch: str,
+        labels: Optional[Sequence[str]],
     ):
-        self.labels = extract_cherry_labels(labels)
+        self.repo = repo
+        self.labels = list(labels)
         self.missing_pull_requests = []
-        if not search_branches:
-            search_branches = ["master", branch]
-        self.search_branches = extract_cherry_branches(search_branches)
-        self.branch = extract_cherry_branches([branch])[0]
+        self.release_branch = release_branch
+        self.main_branch = main_branch
         self.git_repo = Repo()
-        self.base_ref = base_ref or self.get_base()
-        master_branch = CherryBranch(DEFAULT_REPO, "master")
+        self.base_ref = self.get_base()
         click.secho(f"Base ref is {self.base_ref}", fg="cyan")
 
         self.branches = {}
         self.branch_commits = {}
         skipped_commits = 0
-        for branch in self.search_branches:
+        for branch in (self.main_branch, self.release_branch):
             commits = OrderedDict()
             self.branch_commits[branch] = commits
-            for commit in self.git_repo.iter_commits(branch.branch):
+            for commit in self.git_repo.iter_commits(branch):
                 pr_number = commit_pr_number(commit)
                 if pr_number is None:
                     skipped_commits += 1
                 else:
                     commits[pr_number] = commit
-        """
         if skipped_commits:
             click.secho(
                 f"{skipped_commits} commits skipped due to missing PRs", fg="yellow"
             )
-        """
 
         prs: List[Issue] = []
         for label in self.labels:
-            prs += g.get_issues_from_labels(label, prs_only=True)
+            prs += get_issues_from_labels(self.repo, label, prs_only=True)
             click.secho(f'Fetching labeled PRs: "{label}"', fg="cyan")
         prs = deduplicate_prs(prs)
         now = datetime.now()
@@ -89,20 +80,20 @@ class CherryTreeBranch:
         click.secho(f"{len(prs)} PRs found", fg="cyan")
         self.cherries = []
         for pr in prs:
-            master_commit = self.branch_commits[master_branch].get(pr.number)
-            applied_commit = self.branch_commits[branch].get(pr.number)
-            if master_commit is None and pr.closed_at is not None:
+            main_commit = self.branch_commits[self.main_branch].get(pr.number)
+            applied_commit = self.branch_commits[self.release_branch].get(pr.number)
+            if main_commit is None and pr.closed_at is not None:
                 # skip closed PRs that haven't been merged
                 continue
             cherry = Cherry(
-                commit=master_commit,
+                commit=main_commit,
                 pr=pr,
                 is_applied=True if applied_commit is not None else False,
             )
             self.cherries.append(cherry)
 
     def get_base(self) -> str:
-        base_commits = self.git_repo.merge_base("master", self.branch.branch)
+        base_commits = self.git_repo.merge_base(self.main_branch, self.release_branch)
         if len(base_commits) < 1:
             raise Exception("No common ancestor found!")
         elif len(base_commits) > 1:
@@ -112,14 +103,15 @@ class CherryTreeBranch:
     def apply_cherries(
         self,
         target_branch: Optional[str],
-        dryrun: bool = True,
-        error_mode: str = 'skip',
+        dryrun: bool,
+        error_mode: str,
+        force_rebuild_target: bool,
     ):
         current_head = git_get_current_head()
         click.secho("Fetching all branches", fg="cyan")
         os_system("git fetch --all")
-        click.secho(f"Checking out base branch: {self.branch.branch}", fg="cyan")
-        os_system(f"git checkout {self.branch.branch}")
+        click.secho(f"Checking out base branch: {self.release_branch}", fg="cyan")
+        os_system(f"git checkout {self.release_branch}")
 
         if target_branch is None and dryrun:
             target_branch = TMP_BRANCH
@@ -129,11 +121,15 @@ class CherryTreeBranch:
             )
             os_system(f"git branch -D {target_branch}", raise_on_error=False)
             os_system(f"git checkout -b {target_branch}")
-        elif target_branch is None and not dryrun:
+        elif (target_branch is None or target_branch == self.release_branch) and not dryrun:
             # base and target are the same - no need to recheckout
-            target_branch = self.branch.branch
+            target_branch = self.release_branch
         else:
             os_system(f"git branch {target_branch}", raise_on_error=False)
+            if force_rebuild_target:
+                click.secho(f"Recreating target branch: {target_branch}", fg="cyan")
+                os_system(f"git branch -D {target_branch}", raise_on_error=False)
+                os_system(f"git branch {target_branch}")
             click.secho(f"Checking out target branch: {target_branch}", fg="cyan")
             os_system(f"git checkout {target_branch}")
 
@@ -185,6 +181,8 @@ class CherryTreeBranch:
                         truncate_str(f"error-conflict #{pr.number}: {pr.title}"),
                         fg="red",
                     )
+                    # These need to be put into a wrapper to avoid re-hitting the
+                    # GH API later
                     conflicted_cherries.append(CommitSummary(
                         pr_number=pr.number,
                         pr_title=pr.title,
@@ -229,10 +227,9 @@ class CherryTreeBranch:
 
         click.echo()
         click.secho(f"Summary:", fg="cyan")
-        if applied_cherries:
-            click.secho(
-                f"{len(applied_cherries)} successful cherries", fg="cyan",
-            )
+        click.secho(
+            f"{len(applied_cherries)} successful cherries", fg="cyan",
+        )
         if applied_dryrun_cherries:
             click.secho(
                 f"{len(applied_dryrun_cherries)} dry-run cherries", fg="cyan",

@@ -16,28 +16,35 @@ def cli():
 
 
 @cli.command()
-@click.argument("minor_version")
+@click.argument("release-branch")
 @click.option(
     "--target-branch", "-t", help="target branch for baking. Leave empty for dry run"
 )
 @click.option(
-    "--search-branch",
-    "-s",
-    multiple=True,
-    help='Default "master", multiple is allowed as in "-s foo -s bar"',
+    "--main_branch",
+    "-m",
+    help="name of branch containing cherries, usually `master` or `main`",
+    default="master",
 )
 @click.option(
-    "--labels",
+    "--repo",
+    "-r",
+    help='The name of the main repo. Example: apache/superset',
+    show_default=True,
+    required=True,
+)
+@click.option(
+    "--label",
     "-l",
     multiple=True,
-    help='PR labels to include in branch, default is "v{branch}"',
+    help='Name of label to search for. Supports multiple labels, e.g. `-l Label1 -l Label2`',
+    required=True,
 )
-@click.option("--base-ref", "-r")
 @click.option(
-    "--dryrun/--no-dryrun",
-    "-c",
-    default=True,
+    "--no-dryrun", "-nd",
+    is_flag=True,
     help="Should cherries be committed to target branch",
+    show_default=True,
 )
 @click.option(
     "--error-mode",
@@ -47,53 +54,68 @@ def cli():
          "cherry picking.",
     type=click.Choice(["break", "dryrun", "skip"], case_sensitive=False),
     default="skip",
+    show_default=True,
+)
+@click.option(
+    "--force-rebuild-target", "-f",
+    is_flag=True,
+    help="Forcefully remove target branch before applying cherries. Only relevant "
+         "when using `--target-branch`",
+    show_default=True,
 )
 def bake(
-    minor_version,
+    release_branch,
+    main_branch,
+    repo,
     target_branch,
-    search_branch,
-    base_ref,
-    labels,
-    dryrun,
+    label,
+    no_dryrun,
     error_mode,
+    force_rebuild_target,
 ):
     """Applies cherries to release"""
-    if dryrun:
-        click.secho(
-            "Running in dryrun mode, all changes will be rolled back", fg="cyan"
-        )
-    else:
+    if no_dryrun:
         click.secho(
             "Running in non-dryrun mode, all changes will be committed!", fg="red"
         )
-    if not dryrun and error_mode == "dryrun":
+        if force_rebuild_target and target_branch:
+            click.secho(
+                f"Forcefully rebuilding target branch `{target_branch}` "
+                f"from base branch `{release_branch}`!", fg="red"
+            )
+    else:
+        click.secho(
+            "Running in dryrun mode, all changes will be rolled back", fg="cyan"
+        )
+    if no_dryrun and error_mode == "dryrun":
         click.secho(
             "In case of conflict: skip conflicted cherry, "
             "revert to dryrun mode for subsequent cherries", fg="cyan"
         )
-    elif not dryrun and error_mode == "skip":
+    elif no_dryrun and error_mode == "skip":
         click.secho(
             "In case of conflict: skip conflicted cherry, "
             "continue applying subsequent cherries", fg="cyan"
         )
-    elif  not dryrun:
+    elif no_dryrun:
         click.secho(
             "In case of conflict: stop applying cherries, "
             "revert to dry-run for subsequent cherries", fg="cyan"
         )
 
-    if target_branch and check_if_branch_exists(target_branch):
-        minor_version = target_branch
+    if force_rebuild_target is False and target_branch and check_if_branch_exists(target_branch):
+        release_branch = target_branch
     cherry_tree = CherryTreeBranch(
-        minor_version,
-        base_ref,
-        labels=labels,
-        search_branches=search_branch,
+        repo=repo,
+        release_branch=release_branch,
+        main_branch=main_branch,
+        labels=label,
     )
     cherry_tree.apply_cherries(
         target_branch=target_branch,
-        dryrun=dryrun,
+        dryrun=not no_dryrun,
         error_mode=error_mode,
+        force_rebuild_target=force_rebuild_target,
     )
 
 

@@ -11,13 +11,10 @@ from github.Issue import Issue
 from github.GithubException import UnknownObjectException
 from github.Repository import Repository
 
-from cherrytree.classes import CherryBranch, CherryLabel, CherryTreeExecutionException
+from cherrytree.classes import CherryTreeExecutionException
 
 # PRs are either of form "Merge pull request #nnn from..." or "...(#nnn)"
-PR_REGEX = re.compile(r"(^Merge pull request #(\d+) from|\(#(\d*)\)$)")
-
-
-DEFAULT_REPO = "apache/superset"
+PR_REGEX = re.compile(r"(^Merge pull request #(\d+) from|\(#(\d+)\)$)")
 
 
 def get_github_instance() -> Github:
@@ -32,29 +29,29 @@ def get_repo(repo: str) -> Repository:
     return g.get_repo(repo)
 
 
-def get_issues_from_labels(label: CherryLabel, prs_only: bool = False) -> List[Issue]:
+def get_issues_from_labels(repo: str, label: str, prs_only: bool = False) -> List[Issue]:
     label_objects: List[Label] = []
-    repo = get_repo(label.repo)
+    gh_repo = get_repo(repo)
     try:
-        label_objects.append(repo.get_label(label.label))
+        label_objects.append(gh_repo.get_label(label))
     except UnknownObjectException:
         # unknown label
         return []
-    issues = repo.get_issues(labels=label_objects, state="all")
+    issues = gh_repo.get_issues(labels=label_objects, state="all")
     if prs_only:
         return [o for o in issues if o.pull_request]
     return [o for o in issues]
 
 
-def get_commits(branch: CherryBranch, since=None):
+def get_commits(repo: str, branch: str, since=None):
     """Get commit objects from a branch, over a limited period"""
-    repo = get_repo(branch.repo)
-    branch_object = repo.get_branch(branch.branch)
+    gh_repo = get_repo(repo)
+    branch_object = gh_repo.get_branch(branch)
     sha = branch_object.commit.sha
     if since:
-        commits = repo.get_commits(sha=sha, since=since)
+        commits = gh_repo.get_commits(sha=sha, since=since)
     else:
-        commits = repo.get_commits(sha=sha)
+        commits = gh_repo.get_commits(sha=sha)
     return commits
 
 
@@ -83,32 +80,6 @@ def truncate_str(value: str, width: int = 90) -> str:
     if len(trunc_value) < len(value.strip()):
         trunc_value = f"{trunc_value}{cont_str}"
     return f"{trunc_value:<{width}}"
-
-
-def extract_cherry_branches(branches: Sequence[str]) -> List[CherryBranch]:
-    ret: List[CherryBranch] = []
-    for branch in branches:
-        split = branch.split(" ")
-        if len(split) == 1:
-            ret.append(CherryBranch(DEFAULT_REPO, split[0]))
-        elif len(split) == 2:
-            ret.append(CherryBranch(split[0], split[1]))
-        else:
-            raise Exception(f"Invalid branch: {branch}")
-    return ret
-
-
-def extract_cherry_labels(labels: Sequence[str]) -> List[CherryLabel]:
-    ret: List[CherryLabel] = []
-    for label in labels:
-        split = label.split(" ")
-        if len(split) == 1:
-            ret.append(CherryLabel(DEFAULT_REPO, split[0]))
-        elif len(split) == 2:
-            ret.append(CherryLabel(split[0], split[1]))
-        else:
-            raise Exception(f"Invalid label: {label}")
-    return ret
 
 
 def git_get_current_head() -> str:
