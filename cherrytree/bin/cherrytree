@@ -1,118 +1,87 @@
 #!/usr/bin/env python
-import json
 import os
-import re
 import sys
-from typing import Any, Dict, Optional
 
 import click
-import delegator
-from pyhocon import ConfigFactory
-import yaml
-from yaspin import yaspin
 
 from cherrytree.branch import CherryTreeBranch
+from cherrytree.github_utils import check_if_branch_exists
 
 sys.path.insert(0, os.path.abspath(".."))
 
-
-TMP_BRANCH = "_tmp_branch"
 
 @click.group()
 def cli():
     click.secho("🍒🌳🍒 CherryTree", fg="cyan")
 
 
-def apply_cherries(
-        cherry_tree: CherryTreeBranch,
-        base_branch: str,
-        target_branch: Optional[str],
-        dryrun: bool = True,
-):
-    current_head = git_get_current_head()
-    os_system("git fetch --all")
-    click.secho("Checking out base branch...", fg='blue')
-    os_system(f"git checkout {base_branch}")
-
-    if target_branch is None:
-        target_branch = TMP_BRANCH
-        os_system(f"git branch -D {target_branch}", raise_on_error=False)
-        os_system(f"git branch {target_branch}")
-    else:
-        # try to create branch if it doesn't exist
-        os_system(f"git branch {target_branch}", raise_on_error=False)
-
-    os_system(f"git checkout {target_branch}")
-
-    for cherry in reversed(cherry_tree.cherries):
-        pr = cherry.pr
-        commit = cherry.commit
-        if commit is None:
-            click.secho(f"Missing {pr.number}: {pr.title}", fg='red')
-            continue
-        sha = cherry.commit.hexsha
-        if cherry.is_applied:
-            click.secho(f"Skipping {pr.number}: {pr.title}", fg='yellow')
-            continue
-        try:
-            os_system(f"git cherry-pick -x {sha}")
-            click.secho(f"Applied #{pr.number}: {pr.title}", fg='green')
-            if dryrun:
-                os_system(f"git reset --hard HEAD~1")
-        except Exception:
-            os_system("git cherry-pick --abort")
-            # try to ff to see if cherry was already applied
-            try:
-                os_system(f"git cherry-pick --ff {sha}")
-                click.secho(f"Skipping {pr.number}: {pr.title} (empty commit)", fg='yellow')
-            except Exception:
-                click.secho(f"Conflict #{pr.number}: {pr.title}", fg='red')
-                os_system("git cherry-pick --abort")
-
-    os_system(f"git checkout {current_head}")
-    if target_branch == TMP_BRANCH:
-        os_system(f"git branch -D {target_branch}")
-    exit(1)
-
-
-def output_recipe(data: Dict[str, Any], output_format: str):
-    if output_format == 'yaml':
-        output = yaml.dump(data, default_flow_style=False)
-    else:
-        output = json.dumps(data, indent=2)
-    click.secho(output, fg='blue')
-
-
 @cli.command()
 @click.argument("minor_version")
 @click.option(
-    "--target-branch", '-t',
-    help="target branch for baking. Leave empty for dry run")
+    "--target-branch", "-t", help="target branch for baking. Leave empty for dry run"
+)
 @click.option(
-    "--search-branch", '-s', multiple=True,
-    help='Default "master", multiple is allowed as in "-s foo -s bar"')
+    "--search-branch",
+    "-s",
+    multiple=True,
+    help='Default "master", multiple is allowed as in "-s foo -s bar"',
+)
 @click.option(
-    "--labels", '-l', multiple=True,
-    help='PR labels to include in branch, default is "v{branch}"')
-@click.option("--base-ref", '-r')
+    "--labels",
+    "-l",
+    multiple=True,
+    help='PR labels to include in branch, default is "v{branch}"',
+)
+@click.option("--base-ref", "-r")
 @click.option(
-    '--output-format', '-o', type=click.Choice(['yaml', 'json']), default='json')
-@click.option(
-    "--dryrun/--no-dryrun", '-c',
+    "--dryrun/--no-dryrun",
+    "-c",
     default=True,
-    help="commit changes to target branch")
-def update_recipe(
-        minor_version,
-        target_branch,
-        search_branch,
-        base_ref,
-        labels,
-        output_format,
-        dryrun,
+    help="Should cherries be committed to target branch",
+)
+@click.option(
+    "--error-mode",
+    "-e",
+    help="What to do in case of an error. `skip` skips conflicted cherries, "
+         "`dryrun` reverts to dryrun for subsequent prs and `break` stops "
+         "cherry picking.",
+    type=click.Choice(["break", "dryrun", "skip"], case_sensitive=False),
+    default="skip",
+)
+def bake(
+    minor_version,
+    target_branch,
+    search_branch,
+    base_ref,
+    labels,
+    dryrun,
+    error_mode,
 ):
-    """Creates or updates a recipe (release) file"""
+    """Applies cherries to release"""
+    if dryrun:
+        click.secho(
+            "Running in dryrun mode, all changes will be rolled back", fg="cyan"
+        )
+    else:
+        click.secho(
+            "Running in non-dryrun mode, all changes will be committed!", fg="red"
+        )
+    if not dryrun and error_mode == "dryrun":
+        click.secho(
+            "In case of conflict: skip conflicted cherry, "
+            "revert to dryrun mode for subsequent cherries", fg="cyan"
+        )
+    elif not dryrun and error_mode == "skip":
+        click.secho(
+            "In case of conflict: skip conflicted cherry, "
+            "continue applying subsequent cherries", fg="cyan"
+        )
+    elif  not dryrun:
+        click.secho(
+            "In case of conflict: stop applying cherries, "
+            "revert to dry-run for subsequent cherries", fg="cyan"
+        )
 
-    click.secho(f"Crafting recipe for {minor_version}", fg="yellow")
     if target_branch and check_if_branch_exists(target_branch):
         minor_version = target_branch
     cherry_tree = CherryTreeBranch(
@@ -121,104 +90,11 @@ def update_recipe(
         labels=labels,
         search_branches=search_branch,
     )
-    apply_cherries(
-        cherry_tree=cherry_tree,
-        base_branch=minor_version,
+    cherry_tree.apply_cherries(
         target_branch=target_branch,
         dryrun=dryrun,
+        error_mode=error_mode,
     )
-    # data = rb.data()
-
-
-def os_system(cmd, raise_on_error=True) -> str:
-    p = delegator.run(cmd)
-    if raise_on_error and p.return_code != 0:
-        raise Exception(p.err)
-    return p.out
-
-
-def git_get_current_head() -> str:
-    output = os_system("git status | head -1")
-    match = re.match("(?:HEAD detached at|On branch) (.*)", output)
-    if not match:
-        return ""
-    return match.group(1)
-
-
-def update_spinner_txt(spinner, txt):
-    spinner.text = txt
-
-
-def get_remotes_from_current_repo():
-    return ["preset-io", "apache"]
-
-
-def check_if_branch_exists(branch: str) -> bool:
-    current_head = git_get_current_head()
-    try:
-        os_system(f"git checkout {branch}")
-    except Exception:
-        return False
-    os_system(f"git checkout {current_head}")
-    return True
-
-@cli.command()
-@click.argument("micro_version")
-def bake(micro_version, *args):
-    """Bakes a release based on a bake file"""
-    print(args)
-    with yaspin(text="Loading", color="yellow") as spinner:
-        conf = ConfigFactory.parse_file("bakefiles/build.conf")
-
-        base_ref = conf.get("base_ref")
-
-        commit_msg = "my msg 🍒"
-
-        current_head = git_get_current_head()
-
-        update_spinner_txt(spinner, "Checking out changes")
-
-        update_spinner_txt(spinner, "Fetching all branches...")
-        os_system("git fetch --all")
-
-        update_spinner_txt(spinner, "Checking out base branch...")
-        os_system(f"git checkout {base_ref}")
-
-        os_system("git branch -D _temp-branch", raise_on_error=False)
-        os_system("git checkout -b _temp-branch")
-
-        for cherry in conf.get("cherries"):
-            sha = cherry["SHA"]
-            pr_number = cherry["pr_number"]
-            pr_title = cherry["pr_title"]
-            update_spinner_txt(spinner, f"Placing 🍒 #{pr_number}: {pr_title}")
-            try:
-                os_system(f"git cherry-pick -x {sha}")
-            except Exception:
-                os_system("git cherry-pick --abort")
-                update_spinner_txt(spinner, f"Exception #{pr_number}: {pr_title}")
-                os_system(f"git checkout {current_head}")
-                os_system("git branch -D _temp-branch")
-                exit(1)
-
-        num_of_cherries = len(conf.get("cherries"))
-        os_system(f"git reset --soft HEAD~{num_of_cherries}")
-        os_system("git commit -m '{}'".format(conf.get("version")))
-
-        version = conf.get_string("version")
-        bumped_version = int(version.split(".")[-1]) + 1
-
-        os.chdir("..")
-        current_superset_private_branch = (
-            os.popen("git rev-parse --abbrev-ref HEAD").read().split("\n")[0]
-        )
-        os_system("git add .")
-        os_system(f"git commit -m '{commit_msg}'")
-        os_system(f"git push origin {current_superset_private_branch}")
-        update_spinner_txt(spinner, "Redirecting you to github for PR creation 🚢")
-        click.launch(
-            f"https://github.com/lyft/superset-private/compare/{current_superset_private_branch}"
-        )
 
 
 if __name__ == "__main__":

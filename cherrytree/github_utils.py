@@ -1,8 +1,9 @@
 import os
 import re
 from collections import OrderedDict
-from typing import Iterable, List, Optional, Reversible
+from typing import List, Optional, Reversible, Sequence
 
+import delegator
 from git import Commit
 from github import Github
 from github.Label import Label
@@ -10,8 +11,13 @@ from github.Issue import Issue
 from github.GithubException import UnknownObjectException
 from github.Repository import Repository
 
-REPO = "apache/superset"
-PR_REGEX = re.compile(r"(Merge pull request #(\d+) from|\(#(\d*)\)$)")
+from cherrytree.classes import CherryBranch, CherryLabel, CherryTreeExecutionException
+
+# PRs are either of form "Merge pull request #nnn from..." or "...(#nnn)"
+PR_REGEX = re.compile(r"(^Merge pull request #(\d+) from|\(#(\d*)\)$)")
+
+
+DEFAULT_REPO = "apache/superset"
 
 
 def get_github_instance() -> Github:
@@ -21,32 +27,29 @@ def get_github_instance() -> Github:
     return Github(token)
 
 
-def get_repo() -> Repository:
+def get_repo(repo: str) -> Repository:
     g = get_github_instance()
-    return g.get_repo(REPO)
+    return g.get_repo(repo)
 
 
-def get_issues_from_labels(
-    labels: Iterable[str], prs_only: bool = False
-) -> Iterable[Issue]:
-    repo = get_repo()
+def get_issues_from_labels(label: CherryLabel, prs_only: bool = False) -> List[Issue]:
     label_objects: List[Label] = []
-    for label in labels:
-        try:
-            label_objects.append(repo.get_label(label))
-        except UnknownObjectException:
-            # unknown label
-            return []
+    repo = get_repo(label.repo)
+    try:
+        label_objects.append(repo.get_label(label.label))
+    except UnknownObjectException:
+        # unknown label
+        return []
     issues = repo.get_issues(labels=label_objects, state="all")
     if prs_only:
-        issues = [o for o in issues if o.pull_request]
-    return issues
+        return [o for o in issues if o.pull_request]
+    return [o for o in issues]
 
 
-def get_commits(branch="master", since=None):
+def get_commits(branch: CherryBranch, since=None):
     """Get commit objects from a branch, over a limited period"""
-    repo = get_repo()
-    branch_object = repo.get_branch(branch)
+    repo = get_repo(branch.repo)
+    branch_object = repo.get_branch(branch.branch)
     sha = branch_object.commit.sha
     if since:
         commits = repo.get_commits(sha=sha, since=since)
@@ -74,8 +77,70 @@ def get_commit_pr_map(commits: Reversible[Commit]):
     return d
 
 
-def tbl_cell(value: str, width: int) -> str:
-    trunc_value = value[:57].strip()
+def truncate_str(value: str, width: int = 90) -> str:
+    cont_str = "..."
+    trunc_value = value[: width - len(cont_str)].strip()
     if len(trunc_value) < len(value.strip()):
-        trunc_value = f"{trunc_value}..."
-    return f"{trunc_value:<{min(width, 60)}}"
+        trunc_value = f"{trunc_value}{cont_str}"
+    return f"{trunc_value:<{width}}"
+
+
+def extract_cherry_branches(branches: Sequence[str]) -> List[CherryBranch]:
+    ret: List[CherryBranch] = []
+    for branch in branches:
+        split = branch.split(" ")
+        if len(split) == 1:
+            ret.append(CherryBranch(DEFAULT_REPO, split[0]))
+        elif len(split) == 2:
+            ret.append(CherryBranch(split[0], split[1]))
+        else:
+            raise Exception(f"Invalid branch: {branch}")
+    return ret
+
+
+def extract_cherry_labels(labels: Sequence[str]) -> List[CherryLabel]:
+    ret: List[CherryLabel] = []
+    for label in labels:
+        split = label.split(" ")
+        if len(split) == 1:
+            ret.append(CherryLabel(DEFAULT_REPO, split[0]))
+        elif len(split) == 2:
+            ret.append(CherryLabel(split[0], split[1]))
+        else:
+            raise Exception(f"Invalid label: {label}")
+    return ret
+
+
+def git_get_current_head() -> str:
+    output = os_system("git status | head -1")
+    match = re.match("(?:HEAD detached at|On branch) (.*)", output)
+    if not match:
+        return ""
+    return match.group(1)
+
+
+def os_system(cmd, raise_on_error=True) -> str:
+    p = delegator.run(cmd)
+    if raise_on_error and p.return_code != 0:
+        raise CherryTreeExecutionException(p.err)
+    return p.out
+
+
+def check_if_branch_exists(branch: str) -> bool:
+    current_head = git_get_current_head()
+    try:
+        os_system(f"git checkout {branch}")
+    except CherryTreeExecutionException:
+        return False
+    os_system(f"git checkout {current_head}")
+    return True
+
+
+def deduplicate_prs(prs: List[Issue]) -> List[Issue]:
+    pr_set = set()
+    ret: List[Issue] = []
+    for pr in prs:
+        if pr.number not in pr_set:
+            ret.append(pr)
+            pr_set.add(pr.number)
+    return ret
