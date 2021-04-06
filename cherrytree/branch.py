@@ -32,24 +32,32 @@ class CherryTreeBranch:
     release_branch: str
     main_branch: str
     labels: List[str]
+    blocking_labels: List[str]
     branch_commits: Dict[str, Dict[int, Commit]]
     missing_pull_requests: List[Issue]
+    cherries: List[Cherry]
+    blocking_pr_ids: List[int]
 
     def __init__(
         self,
         repo: str,
         release_branch: str,
         main_branch: str,
-        labels: Optional[Sequence[str]],
+        labels: List[str],
+        blocking_labels: List[str],
     ):
         self.repo = repo
-        self.labels = list(labels)
+        self.labels = labels
+        self.blocking_labels = blocking_labels
         self.missing_pull_requests = []
         self.release_branch = release_branch
         self.main_branch = main_branch
         self.git_repo = Repo()
         self.base_ref = self.get_base()
+        self.blocking_pr_ids = []
+
         click.secho(f"Base ref is {self.base_ref}", fg="cyan")
+
 
         self.branches = {}
         self.branch_commits = {}
@@ -68,10 +76,22 @@ class CherryTreeBranch:
                 f"{skipped_commits} commits skipped due to missing PRs", fg="yellow"
             )
 
+        # add all PRs that should be cherries
         prs: List[Issue] = []
         for label in self.labels:
-            prs += get_issues_from_labels(self.repo, label, prs_only=True)
-            click.secho(f'Fetching labeled PRs: "{label}"', fg="cyan")
+            click.secho(f'Fetching labeled PRs: "{label}"', fg="cyan", nl=False)
+            new_prs = get_issues_from_labels(self.repo, label, prs_only=True)
+            click.secho(f' ({len(new_prs)} labels found)', fg="cyan")
+            prs += new_prs
+        prs = deduplicate_prs(prs)
+
+        # add all PRs that are flagged as blocking
+        for label in self.blocking_labels:
+            click.secho(f'Fetching labeled PRs: "{label}"', fg="cyan", nl=False)
+            new_prs = get_issues_from_labels(self.repo, label, prs_only=True)
+            click.secho(f' ({len(new_prs)} labels found)', fg="cyan")
+            self.blocking_pr_ids += [pr.number for pr in new_prs]
+            prs += new_prs
         prs = deduplicate_prs(prs)
         now = datetime.now()
         prs.sort(
@@ -107,6 +127,7 @@ class CherryTreeBranch:
         error_mode: str,
         force_rebuild_target: bool,
     ):
+        error = False
         current_head = git_get_current_head()
         click.secho("Fetching all branches", fg="cyan")
         os_system("git fetch --all")
@@ -135,9 +156,11 @@ class CherryTreeBranch:
 
         applied_cherries: List[Cherry] = []
         applied_dryrun_cherries: List[Cherry] = []
+        blocking_cherries: List[Cherry] = []
         conflicted_cherries: List[CommitSummary] = []
         open_cherries: List[Cherry] = []
 
+        base_sha = self.git_repo.head.commit.hexsha
         for cherry in self.cherries:
             pr = cherry.pr
             commit = cherry.commit
@@ -146,6 +169,7 @@ class CherryTreeBranch:
                     truncate_str(f"error-open #{pr.number}: {pr.title}"), fg="red"
                 )
                 open_cherries.append(cherry)
+                error = True
                 continue
             sha = cherry.commit.hexsha
             if cherry.is_applied:
@@ -153,6 +177,16 @@ class CherryTreeBranch:
                     truncate_str(f"skip-applied #{pr.number}: {pr.title}"), fg="yellow"
                 )
                 continue
+            if cherry.pr.number in self.blocking_pr_ids:
+                click.secho(
+                    truncate_str(f"error-blocking #{pr.number}: {pr.title}"), fg="red"
+                )
+                blocking_cherries.append(cherry)
+                error = True
+                if error_mode == "dryrun":
+                    dryrun = True
+                elif error_mode == "break":
+                    break
             try:
                 os_system(f"git cherry-pick -x {sha}")
                 if dryrun:
@@ -165,9 +199,10 @@ class CherryTreeBranch:
                     nl=False,
                 )
                 if dryrun:
-                    os_system(f"git reset --hard HEAD~1")
+                    # os_system(f"git reset --hard HEAD~1")
                     click.secho(" [DRY-RUN]", fg="cyan")
                 else:
+                    base_sha = cherry.commit.hexsha
                     click.echo()
 
             except CherryTreeExecutionException:
@@ -191,14 +226,27 @@ class CherryTreeBranch:
                         merged_by=pr.closed_by.login,
                     ))
                     os_system("git cherry-pick --abort")
+                    error = True
                     if error_mode == "dryrun":
                         dryrun = True
                     elif error_mode == "break":
                         break
 
+        if dryrun:
+            os_system(f"git reset --hard {base_sha}")
         os_system(f"git checkout {current_head}")
         if target_branch == TMP_BRANCH:
             os_system(f"git branch -D {target_branch}")
+
+        if blocking_cherries:
+            click.echo()
+            click.secho(
+                f"{len(blocking_cherries)} open PRs that need to be cleared first:",
+                fg="red",
+            )
+            for cherry in blocking_cherries:
+                pr = cherry.pr
+                click.echo(f"#{pr.number} (author: {pr.user.login}): {pr.title}")
 
         if open_cherries:
             click.echo()
@@ -234,6 +282,10 @@ class CherryTreeBranch:
             click.secho(
                 f"{len(applied_dryrun_cherries)} dry-run cherries", fg="cyan",
             )
+        if blocking_cherries:
+            click.secho(
+                f"{len(blocking_cherries)} blocking cherries", fg="cyan",
+            )
         if conflicted_cherries:
             click.secho(
                 f"{len(conflicted_cherries)} conflicts", fg="cyan",
@@ -242,3 +294,5 @@ class CherryTreeBranch:
             click.secho(
                 f"{len(open_cherries)} open PRs", fg="cyan",
             )
+        if error:
+            exit(1)

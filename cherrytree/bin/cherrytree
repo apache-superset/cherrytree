@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import os
 import sys
+from typing import Tuple
 
 import click
 
@@ -37,8 +38,14 @@ def cli():
     "--label",
     "-l",
     multiple=True,
-    help='Name of label to search for. Supports multiple labels, e.g. `-l Label1 -l Label2`',
+    help='Name of label to use for cherry picking. Supports multiple labels, e.g. `-l Label1 -l Label2`',
     required=True,
+)
+@click.option(
+    "--blocking-label",
+    "-b",
+    multiple=True,
+    help='Name of labels to block cherry picking operation. Supports multiple labels, e.g. `-b Blocker1 -b Blocker2`',
 )
 @click.option(
     "--no-dryrun", "-nd",
@@ -64,14 +71,15 @@ def cli():
     show_default=True,
 )
 def bake(
-    release_branch,
-    main_branch,
-    repo,
-    target_branch,
-    label,
-    no_dryrun,
-    error_mode,
-    force_rebuild_target,
+    release_branch: str,
+    main_branch: str,
+    repo: str,
+    target_branch: str,
+    label: Tuple[str],
+    blocking_label: Tuple[str],
+    no_dryrun: bool,
+    error_mode: str,
+    force_rebuild_target: bool,
 ):
     """Applies cherries to release"""
     if no_dryrun:
@@ -109,7 +117,8 @@ def bake(
         repo=repo,
         release_branch=release_branch,
         main_branch=main_branch,
-        labels=label,
+        labels=list(label),
+        blocking_labels=list(blocking_label),
     )
     cherry_tree.apply_cherries(
         target_branch=target_branch,
