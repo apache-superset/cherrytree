@@ -166,10 +166,9 @@ class CherryTreeBranch:
             commit = cherry.commit
             if commit is None:
                 click.secho(
-                    truncate_str(f"error-open #{pr.number}: {pr.title}"), fg="red"
+                    truncate_str(f"warning-open #{pr.number}: {pr.title}"), fg="red"
                 )
                 open_cherries.append(cherry)
-                error = True
                 continue
             sha = cherry.commit.hexsha
             if cherry.is_applied:
