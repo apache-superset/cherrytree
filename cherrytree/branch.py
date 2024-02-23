@@ -1,5 +1,5 @@
 from collections import OrderedDict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import click
@@ -122,7 +122,7 @@ class CherryTreeBranch:
             click.secho(f' ({len(blocking_prs)} blocking labels found)', fg="cyan")
             self.blocking_pr_ids += [pr.number for pr in blocking_prs]
         prs = deduplicate_prs(prs)
-        now = datetime.now()
+        now = datetime.now(tz=timezone.utc)
         prs.sort(
             key=lambda x: x.closed_at if x.closed_at is not None else now,
         )
