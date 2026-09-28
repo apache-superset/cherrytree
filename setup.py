@@ -27,7 +27,7 @@ setup(
         'click',
         'pygithub',
         'python-dateutil',
-        'GitPython',
+        'GitPython>=3.1.62',
         'delegator.py',
         'pyyaml',
         'yaspin',
